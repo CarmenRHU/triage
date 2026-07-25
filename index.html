@@ -1778,6 +1778,7 @@ async function loadStaffDetail(id){
       <div class="eyebrow">Editing Record</div>
       <h1 style="font-size:24px;">${esc(rec.firstName)} ${esc(rec.lastName)} <span class="mono" style="color:var(--muted);font-size:13px;font-weight:400;">· ${id}</span></h1>
       <p style="color:var(--muted);font-size:13.5px;margin:4px 0 0;">All fields below can be edited by RHU staff. Age recalculates automatically from birthdate.</p>
+      ${rec._sheetUrl? `<p style="font-size:12.5px;margin:8px 0 0;"><a href="${rec._sheetUrl}" target="_blank" rel="noopener">Open this record's row in Google Sheets ↗</a></p>` : ''}
     </div>
 
     <div class="card">
