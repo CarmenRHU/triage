@@ -192,6 +192,8 @@
   .btn-primary:hover{background:var(--primary-dark);}
   .btn-ghost{background:transparent;border:1px solid #C9D3CD;color:var(--ink);}
   .btn-ghost:hover{background:var(--primary-tint);}
+  .btn-danger{background:var(--alert);color:#fff;}
+  .btn-danger:hover{background:#8f3323;}
   .btn:disabled{opacity:.4;cursor:not-allowed;}
 
   .error-box{background:var(--alert-tint);border:1px solid #E3B7AC;color:var(--alert);
@@ -253,6 +255,8 @@
   .modal-box h3{margin:0 0 8px;font-size:18px;color:var(--primary-dark);}
   .modal-box p{margin:0 0 20px;color:var(--muted);font-size:13.5px;}
   .modal-box .btn{width:100%;}
+  .modal-actions{display:flex;gap:10px;}
+  .modal-actions .btn{flex:1;width:auto;}
 
   /* ================= MOBILE RESPONSIVE ================= */
   @media (max-width:600px){
@@ -466,7 +470,10 @@
     </div>
     <h3 id="modalTitle">Saved</h3>
     <p id="modalMessage">Changes saved.</p>
-    <button class="btn btn-primary" id="modalOkBtn">OK</button>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="modalCancelBtn" style="display:none;">Cancel</button>
+      <button class="btn btn-primary" id="modalOkBtn">OK</button>
+    </div>
   </div>
 </div>
 
@@ -795,8 +802,59 @@ const storageAdapter = {
     }
     localStorage.setItem(key, value);
     return {key, value, shared:!!shared};
+  },
+  async delete(key, shared){
+    if(hasRemoteStorage && !usingFallback){
+      const attempts = 3;
+      for(let i=0;i<attempts;i++){
+        try{ return await window.storage.delete(key, shared); }
+        catch(e){
+          if(i < attempts-1){
+            console.warn(`Remote storage delete failed (attempt ${i+1}/${attempts}), retrying:`, e);
+            await new Promise(r=>setTimeout(r, 300*(i+1)));
+            continue;
+          }
+          console.warn('Remote storage unavailable after retries — switching to on-device storage for this session:', e);
+          usingFallback = true;
+        }
+      }
+    }
+    localStorage.removeItem(key);
+    return {key, deleted:true, shared:!!shared};
   }
 };
+
+/* ============================= GOOGLE SHEET SYNC =============================
+   Used both when a patient submits the triage form and when staff save
+   edits in the Staff Access detail view. Each call POSTs the full record
+   (keyed by id) to a Google Apps Script "Web App" endpoint, which appends
+   a new row for a new id or updates the existing row in place for a
+   returning id — so the sheet always reflects the latest edited data
+   rather than accumulating duplicate rows per record. Paste your deployed
+   Apps Script URL below. See the setup instructions provided alongside
+   this file — until a real URL is pasted in, this sync is a silent no-op
+   and the form still saves normally via storageAdapter either way. */
+const GOOGLE_SHEET_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzK7joHXPqRsRcqcElEtJAMNKOOD-DknJuEQKkUHs-u2zScqdPLOLwGTwC1KK-6FITy/exec';
+
+async function sendToGoogleSheet(id, data){
+  if(!GOOGLE_SHEET_WEB_APP_URL || GOOGLE_SHEET_WEB_APP_URL.indexOf('PASTE_YOUR_') === 0) return;
+  try{
+    // mode:'no-cors' is required because Apps Script web apps don't return
+    // CORS headers to arbitrary origins; this means we can't read the
+    // response, so we treat "no network error" as success. The primary
+    // record is already safely saved via storageAdapter before this runs,
+    // so a failure here never loses patient data — it only means this one
+    // row won't appear in the spreadsheet until staff notice and re-sync.
+    await fetch(GOOGLE_SHEET_WEB_APP_URL, {
+      method:'POST',
+      mode:'no-cors',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify(Object.assign({id}, data))
+    });
+  }catch(e){
+    console.warn('Google Sheet sync failed (record was still saved normally):', e);
+  }
+}
 
 /* ============================= UTIL ============================= */
 function calcAge(bdateStr){
@@ -845,12 +903,36 @@ function showModal(title, message, onOk){
   document.getElementById('modalMessage').textContent=message;
   overlay.classList.add('show');
   const okBtn=document.getElementById('modalOkBtn');
+  const cancelBtn=document.getElementById('modalCancelBtn');
+  cancelBtn.style.display='none';
+  okBtn.className='btn btn-primary';
+  okBtn.textContent='OK';
   const handler=()=>{
     overlay.classList.remove('show');
     okBtn.removeEventListener('click',handler);
     if(onOk) onOk();
   };
   okBtn.addEventListener('click',handler);
+}
+function showConfirm(title, message, confirmLabel, onConfirm){
+  const overlay=document.getElementById('modalOverlay');
+  document.getElementById('modalTitle').textContent=title;
+  document.getElementById('modalMessage').textContent=message;
+  overlay.classList.add('show');
+  const okBtn=document.getElementById('modalOkBtn');
+  const cancelBtn=document.getElementById('modalCancelBtn');
+  cancelBtn.style.display='';
+  okBtn.className='btn btn-danger';
+  okBtn.textContent=confirmLabel || 'Confirm';
+  const cleanup=()=>{
+    overlay.classList.remove('show');
+    okBtn.removeEventListener('click',okHandler);
+    cancelBtn.removeEventListener('click',cancelHandler);
+  };
+  const okHandler=()=>{ cleanup(); if(onConfirm) onConfirm(); };
+  const cancelHandler=()=>{ cleanup(); };
+  okBtn.addEventListener('click',okHandler);
+  cancelBtn.addEventListener('click',cancelHandler);
 }
 function genId(){return 'RHU-'+Date.now().toString(36).toUpperCase()+'-'+Math.floor(Math.random()*900+100);}
 
@@ -1328,7 +1410,7 @@ function attachPatientHandlers(){
   });
   document.querySelectorAll('[data-chipgroup]').forEach(group=>{
     group.querySelectorAll('input[type=radio]').forEach(r=>{
-      r.addEventListener('change',()=>{ form[r.name]=r.value; saveDraft(); render(); scrollToStepTop(); });
+      r.addEventListener('change',()=>{ form[r.name]=r.value; saveDraft(); render(); });
     });
   });
   document.querySelectorAll('[data-medhist]').forEach(cb=>{
@@ -1347,7 +1429,7 @@ function attachPatientHandlers(){
     render();
   });
   document.querySelectorAll('[data-pain]').forEach(btn=>{
-    btn.addEventListener('click',()=>{ form.painLevel=btn.dataset.pain; saveDraft(); render(); scrollToStepTop(); });
+    btn.addEventListener('click',()=>{ form.painLevel=btn.dataset.pain; saveDraft(); render(); });
   });
   document.querySelectorAll('.step').forEach(s=>{
     s.addEventListener('click',()=>{
@@ -1505,6 +1587,7 @@ async function submitForm(){
     try{ const r=await storageAdapter.get('patient-index', true); idx = r? JSON.parse(r.value):[]; }catch(e){ idx=[]; }
     idx.unshift({id, name:`${form.lastName}, ${form.firstName}`, submittedAt:form.submittedAt, status:'Pending'});
     await storageAdapter.set('patient-index', JSON.stringify(idx), true);
+    sendToGoogleSheet(id, form); // fire-and-forget: syncs to Google Sheet, never blocks submission
     clearDraft();
     renderConfirmation(id);
   }catch(e){
@@ -1812,6 +1895,9 @@ async function loadStaffDetail(id){
       </div>
       <button class="btn btn-primary" id="saveDetailBtn" style="width:100%;margin-top:10px;">Save All Changes</button>
       <div class="hint" id="saveHint" style="text-align:center;margin-top:8px;"></div>
+      <hr class="divider">
+      <button class="btn btn-ghost" id="deleteRecordBtn" style="width:100%;color:var(--alert);border-color:#E3B7AC;">Delete Record</button>
+      <div class="hint" style="text-align:center;margin-top:8px;">Removes this record from the patient list here. It stays archived in the Google Sheet.</div>
     </div>
   `;
 
@@ -1851,6 +1937,7 @@ async function loadStaffDetail(id){
       let idx = idxR? JSON.parse(idxR.value):[];
       idx = idx.map(p=> p.id===id? {...p, name:`${rec.lastName}, ${rec.firstName}`, status:rec.status} : p);
       await storageAdapter.set('patient-index', JSON.stringify(idx), true);
+      sendToGoogleSheet(id, rec); // fire-and-forget: syncs the edited record (upserts by id) to the Google Sheet
       btn.textContent='Save All Changes'; btn.disabled=false;
       showModal('Saved', `${rec.firstName} ${rec.lastName}'s record has been updated.`, ()=>{
         view='staffList'; render();
@@ -1860,6 +1947,33 @@ async function loadStaffDetail(id){
       btn.textContent='Save All Changes'; btn.disabled=false;
       showModal('Save Failed', 'Something went wrong saving this record. Please try again.', null);
     }
+  });
+
+  document.getElementById('deleteRecordBtn').addEventListener('click', ()=>{
+    showConfirm(
+      'Delete this record?',
+      `This removes ${rec.firstName} ${rec.lastName}'s record from the patient list on this device/account. It will NOT be deleted from the Google Sheet — that copy stays as your archive. This can't be undone here.`,
+      'Delete Record',
+      async ()=>{
+        const delBtn=document.getElementById('deleteRecordBtn');
+        delBtn.disabled=true; delBtn.textContent='Deleting…';
+        try{
+          // Deliberately does NOT touch the Google Sheet — sendToGoogleSheet
+          // is never called here, so the archived row stays put there.
+          await storageAdapter.delete('patient:'+id, true);
+          let idxR = await storageAdapter.get('patient-index', true);
+          let idx = idxR? JSON.parse(idxR.value):[];
+          idx = idx.filter(p=> p.id!==id);
+          await storageAdapter.set('patient-index', JSON.stringify(idx), true);
+          showModal('Deleted', `${rec.firstName} ${rec.lastName}'s record has been removed from the patient list.`, ()=>{
+            view='staffList'; render();
+          });
+        }catch(e){
+          delBtn.disabled=false; delBtn.textContent='Delete Record';
+          showModal('Delete Failed', 'Something went wrong deleting this record. Please try again.', null);
+        }
+      }
+    );
   });
 }
 
