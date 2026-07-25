@@ -825,34 +825,55 @@ const storageAdapter = {
 };
 
 /* ============================= GOOGLE SHEET SYNC =============================
-   Used both when a patient submits the triage form and when staff save
-   edits in the Staff Access detail view. Each call POSTs the full record
-   (keyed by id) to a Google Apps Script "Web App" endpoint, which appends
-   a new row for a new id or updates the existing row in place for a
-   returning id — so the sheet always reflects the latest edited data
-   rather than accumulating duplicate rows per record. Paste your deployed
-   Apps Script URL below. See the setup instructions provided alongside
-   this file — until a real URL is pasted in, this sync is a silent no-op
-   and the form still saves normally via storageAdapter either way. */
+   The Google Sheet is now the SHARED, cross-device database for Staff
+   Access — window.storage/localStorage only ever lived on one browser, so
+   a record saved on the laptop never appeared on the phone. Staff List
+   and Staff Detail now read directly from the Sheet (via doGet), and
+   every submit/edit/delete writes to the Sheet (via doPost) — that's what
+   makes every device see the same records. The matching Apps Script code
+   (Code.gs) must implement doGet + doPost as described in the setup
+   notes provided alongside this file. Paste your deployed Web App URL
+   below — until a real URL is pasted in, staff will only see records
+   saved on that same device/browser. */
 const GOOGLE_SHEET_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzK7joHXPqRsRcqcElEtJAMNKOOD-DknJuEQKkUHs-u2zScqdPLOLwGTwC1KK-6FITy/exec';
+const sheetConfigured = !!(GOOGLE_SHEET_WEB_APP_URL && GOOGLE_SHEET_WEB_APP_URL.indexOf('PASTE_YOUR_') !== 0);
 
-async function sendToGoogleSheet(id, data){
-  if(!GOOGLE_SHEET_WEB_APP_URL || GOOGLE_SHEET_WEB_APP_URL.indexOf('PASTE_YOUR_') === 0) return;
+// Writes one record (create, edit, or soft-delete) to the shared Sheet.
+// Retries a few times on network failure. Returns true/false so callers
+// can tell the user whether the record actually made it to the shared
+// store, instead of assuming silent success like before.
+async function postToGoogleSheet(id, data, opts={}){
+  if(!sheetConfigured) return false;
+  const payload = Object.assign({}, data, {id}, opts.deleted? {_deleted:true} : {});
+  const attempts = 3;
+  for(let i=0;i<attempts;i++){
+    try{
+      const res = await fetch(GOOGLE_SHEET_WEB_APP_URL, {
+        method:'POST',
+        headers:{'Content-Type':'text/plain;charset=utf-8'}, // avoids CORS preflight
+        body: JSON.stringify(payload)
+      });
+      const j = await res.json().catch(()=>({ok:false}));
+      if(j && j.ok) return true;
+    }catch(e){
+      console.warn(`Google Sheet write failed (attempt ${i+1}/${attempts}):`, e);
+    }
+    if(i < attempts-1) await new Promise(r=>setTimeout(r, 400*(i+1)));
+  }
+  return false;
+}
+
+// Fetches every non-deleted record from the shared Sheet. This is the
+// source of truth for the Staff List/Detail views on every device.
+async function fetchGoogleSheetRecords(){
+  if(!sheetConfigured) return null; // null = "not set up", distinct from [] = "set up but empty"
   try{
-    // mode:'no-cors' is required because Apps Script web apps don't return
-    // CORS headers to arbitrary origins; this means we can't read the
-    // response, so we treat "no network error" as success. The primary
-    // record is already safely saved via storageAdapter before this runs,
-    // so a failure here never loses patient data — it only means this one
-    // row won't appear in the spreadsheet until staff notice and re-sync.
-    await fetch(GOOGLE_SHEET_WEB_APP_URL, {
-      method:'POST',
-      mode:'no-cors',
-      headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify(Object.assign({id}, data))
-    });
+    const res = await fetch(GOOGLE_SHEET_WEB_APP_URL, {method:'GET'});
+    const arr = await res.json();
+    return Array.isArray(arr)? arr : [];
   }catch(e){
-    console.warn('Google Sheet sync failed (record was still saved normally):', e);
+    console.warn('Google Sheet fetch failed:', e);
+    return null;
   }
 }
 
@@ -1581,15 +1602,19 @@ async function submitForm(){
   form.submittedAt = new Date().toISOString();
   form.status = 'Pending';
   try{
+    // Local save first so the patient's own confirmation screen never
+    // fails due to a network hiccup. This copy is same-device only.
     await storageAdapter.set('patient:'+id, JSON.stringify(form), true);
-    // maintain an index list for fast staff listing
     let idx=[];
     try{ const r=await storageAdapter.get('patient-index', true); idx = r? JSON.parse(r.value):[]; }catch(e){ idx=[]; }
     idx.unshift({id, name:`${form.lastName}, ${form.firstName}`, submittedAt:form.submittedAt, status:'Pending'});
     await storageAdapter.set('patient-index', JSON.stringify(idx), true);
-    sendToGoogleSheet(id, form); // fire-and-forget: syncs to Google Sheet, never blocks submission
+
+    // The Google Sheet write is what makes this record visible to staff
+    // on every device — awaited (with retries) rather than fire-and-forget.
+    const synced = await postToGoogleSheet(id, form);
     clearDraft();
-    renderConfirmation(id);
+    renderConfirmation(id, synced);
   }catch(e){
     submitBtn.disabled=false; submitBtn.textContent='Submit Triage Form';
     const errBox=document.getElementById('errorBox');
@@ -1598,7 +1623,7 @@ async function submitForm(){
     errBox.style.display='block';
   }
 }
-function renderConfirmation(id){
+function renderConfirmation(id, synced=true){
   const app=document.getElementById('app');
   app.innerHTML = `<div class="wrap" style="max-width:560px;">
     <div class="confirm-box">
@@ -1606,6 +1631,7 @@ function renderConfirmation(id){
       <h2 style="margin:10px 0 4px;">Thank you, ${esc(form.firstName)}.</h2>
       <p style="color:var(--muted);margin:0;">Your triage record has been received. Please show this reference number to RHU staff.</p>
       <div class="code">${id}</div>
+      ${synced? '' : `<p style="color:var(--alert);font-size:13px;margin-top:10px;">This device couldn't reach the shared record system — please show this reference number to staff directly, in case it doesn't appear on their screen yet.</p>`}
       <button class="btn btn-primary" id="newFormBtn">Start Another Form</button>
     </div>
   </div>`;
@@ -1644,6 +1670,7 @@ function renderStaffList(){
       <div class="eyebrow">Staff Dashboard</div>
       <h1 style="font-size:26px;">Patient Triage Records</h1>
     </div>
+    <div id="staffSyncWarning"></div>
     <div class="search-row">
       <input type="text" id="staffSearch" placeholder="Search by name or reference number…">
     </div>
@@ -1658,13 +1685,32 @@ function renderStaffList(){
   </div>`;
 }
 let staffIndexCache=[];
+let staffRecordsCache={}; // id -> full record, populated from the Sheet so Staff Detail doesn't need another round trip
 async function loadStaffList(){
   document.getElementById('navPatient').onclick=startNewPatientForm;
   document.getElementById('navStaff').onclick=openStaffTab;
-  try{
-    const r = await storageAdapter.get('patient-index', true);
-    staffIndexCache = r? JSON.parse(r.value):[];
-  }catch(e){ staffIndexCache=[]; }
+
+  const tb=document.getElementById('staffTbody');
+  const records = await fetchGoogleSheetRecords();
+
+  if(records!==null){
+    // Sheet reachable — this is the shared, cross-device list.
+    staffRecordsCache = {};
+    staffIndexCache = records.map(rec=>{
+      staffRecordsCache[rec.id]=rec;
+      return {id:rec.id, name:`${rec.lastName||''}, ${rec.firstName||''}`, submittedAt:rec.submittedAt, status:rec.status};
+    }).sort((a,b)=> new Date(b.submittedAt||0) - new Date(a.submittedAt||0));
+  }else{
+    // Sheet unreachable (offline, or not yet configured) — fall back to
+    // whatever this device saved locally, so the page isn't just blank.
+    try{
+      const r = await storageAdapter.get('patient-index', true);
+      staffIndexCache = r? JSON.parse(r.value):[];
+    }catch(e){ staffIndexCache=[]; }
+    const warn=document.getElementById('staffSyncWarning');
+    if(warn) warn.innerHTML = `<div class="card" style="border-color:#E3B7AC;background:var(--alert-tint);color:var(--alert);padding:12px 16px;font-size:13.5px;">Couldn't reach the shared record system — showing records saved on this device only. Records saved on other devices won't appear until this reconnects.</div>`;
+  }
+
   renderTbody(staffIndexCache);
   document.getElementById('staffSearch').addEventListener('input',(e)=>{
     const q=e.target.value.toLowerCase();
@@ -1715,11 +1761,15 @@ function ef(rec,id,label,type,opts={}){
 
 async function loadStaffDetail(id){
   const host=document.getElementById('detailHost');
-  let rec;
-  try{
-    const r = await storageAdapter.get('patient:'+id, true);
-    rec = r? JSON.parse(r.value):null;
-  }catch(e){ rec=null; }
+  let rec = staffRecordsCache[id] || null;
+  if(!rec){
+    // Not in the cache from the last list load (e.g. Sheet was unreachable
+    // then) — fall back to this device's local copy.
+    try{
+      const r = await storageAdapter.get('patient:'+id, true);
+      rec = r? JSON.parse(r.value):null;
+    }catch(e){ rec=null; }
+  }
   if(!rec){ host.innerHTML=`<div class="card">Record not found.</div>`; return; }
   if(!Array.isArray(rec.medHistory)) rec.medHistory = [];
 
@@ -1932,16 +1982,26 @@ async function loadStaffDetail(id){
     const hint=document.getElementById('saveHint');
     btn.disabled=true; btn.textContent='Saving…';
     try{
+      // Keep a same-device local copy too, but the Sheet write below is
+      // what other devices will actually see.
       await storageAdapter.set('patient:'+id, JSON.stringify(rec), true);
       let idxR = await storageAdapter.get('patient-index', true);
       let idx = idxR? JSON.parse(idxR.value):[];
       idx = idx.map(p=> p.id===id? {...p, name:`${rec.lastName}, ${rec.firstName}`, status:rec.status} : p);
       await storageAdapter.set('patient-index', JSON.stringify(idx), true);
-      sendToGoogleSheet(id, rec); // fire-and-forget: syncs the edited record (upserts by id) to the Google Sheet
+
+      const synced = await postToGoogleSheet(id, rec);
+      staffRecordsCache[id] = rec; // keep in-memory cache current for this session
       btn.textContent='Save All Changes'; btn.disabled=false;
-      showModal('Saved', `${rec.firstName} ${rec.lastName}'s record has been updated.`, ()=>{
-        view='staffList'; render();
-      });
+      if(synced){
+        showModal('Saved', `${rec.firstName} ${rec.lastName}'s record has been updated.`, ()=>{
+          view='staffList'; render();
+        });
+      }else{
+        showModal('Saved on this device only', `Couldn't reach the shared record system, so this update hasn't reached other devices yet. Please try again once you're back online.`, ()=>{
+          view='staffList'; render();
+        });
+      }
     }catch(e){
       hint.textContent = 'Save failed: '+(e && e.message ? e.message : 'unknown error');
       btn.textContent='Save All Changes'; btn.disabled=false;
@@ -1958,16 +2018,26 @@ async function loadStaffDetail(id){
         const delBtn=document.getElementById('deleteRecordBtn');
         delBtn.disabled=true; delBtn.textContent='Deleting…';
         try{
-          // Deliberately does NOT touch the Google Sheet — sendToGoogleSheet
-          // is never called here, so the archived row stays put there.
+          // Soft-delete on the shared Sheet (flags the row rather than
+          // erasing it) so the record disappears from the list on every
+          // device, not just this one, while staying archived in the Sheet.
+          const synced = await postToGoogleSheet(id, rec, {deleted:true});
           await storageAdapter.delete('patient:'+id, true);
           let idxR = await storageAdapter.get('patient-index', true);
           let idx = idxR? JSON.parse(idxR.value):[];
           idx = idx.filter(p=> p.id!==id);
           await storageAdapter.set('patient-index', JSON.stringify(idx), true);
-          showModal('Deleted', `${rec.firstName} ${rec.lastName}'s record has been removed from the patient list.`, ()=>{
-            view='staffList'; render();
-          });
+          delete staffRecordsCache[id];
+          staffIndexCache = staffIndexCache.filter(p=> p.id!==id);
+          if(synced){
+            showModal('Deleted', `${rec.firstName} ${rec.lastName}'s record has been removed from the patient list.`, ()=>{
+              view='staffList'; render();
+            });
+          }else{
+            showModal('Removed on this device only', `Couldn't reach the shared record system, so this record may still show up on other devices until this reconnects.`, ()=>{
+              view='staffList'; render();
+            });
+          }
         }catch(e){
           delBtn.disabled=false; delBtn.textContent='Delete Record';
           showModal('Delete Failed', 'Something went wrong deleting this record. Please try again.', null);
