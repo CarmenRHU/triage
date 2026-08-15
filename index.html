@@ -763,7 +763,6 @@ function blankForm(){
    Zip Code auto-filled from the selection. Data comes from the free, public
    PSGC Cloud API (https://psgc.cloud) — no key required. */
 const PSGC_BASE = 'https://psgc.cloud/api/v2';
-const PSGC_V1_BASE = 'https://psgc.cloud/api'; // v1 — the only place zip_code is actually documented
 let psgcProvinces = null;   // [{name, region}]
 let psgcCities = null;      // [{name, type, region, province, zip, code}]
 let psgcReady = false;
@@ -773,10 +772,14 @@ const psgcBarangayRenderScheduled = new Set(); // cityCodes that already have a 
 
 function escAttr(s){ return String(s===undefined||s===null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
-/* Even the v1 zip_code data has occasional gaps (new/renamed towns, etc.),
-   and towns like "Carmen" exist in several provinces — this table is the
-   last-resort fallback for known cases where auto-fill still comes up
-   empty. Add more "Province|City" entries here if others turn up. */
+/* The psgc.cloud API's zip_code field comes back empty for a handful of
+   municipalities — most noticeably every town named "Carmen", since the
+   Philippines has several (Cebu, Bohol, Davao del Norte, Agusan del Norte,
+   Cotabato, Surigao del Sur) and the API's data appears to drop the zip on
+   these name collisions. This table plugs the gap with the correct,
+   verified zip codes so auto-fill still works for those towns. Add more
+   "Province|City" entries here if other municipalities turn up with the
+   same problem. */
 const ZIP_OVERRIDES = {
   'Cebu|Carmen': '6005',
   'Bohol|Carmen': '6319',
@@ -787,46 +790,27 @@ const ZIP_OVERRIDES = {
   'Surigao del Sur|Carmen': '8315'
 };
 
-// Fetches the zip_code field from the v1 /api/cities and /api/municipalities
-// endpoints — the ONLY place PSGC Cloud actually documents that field (the
-// v2 /cities-municipalities endpoint used for the province/city/barangay
-// dropdowns never officially returns it, which is why zip auto-fill was
-// unreliable across the board, not just for Carmen). Keyed by PSGC `code`
-// rather than name, since several towns share a name (Carmen, Pilar, San
-// Isidro, etc.) but every code is unique.
-async function psgcLoadZipMap(){
-  const zipByCode = {};
-  try{
-    const [citiesRes, munRes] = await Promise.all([
-      fetch(PSGC_V1_BASE+'/cities'),
-      fetch(PSGC_V1_BASE+'/municipalities')
-    ]);
-    const [citiesJson, munJson] = await Promise.all([citiesRes.json(), munRes.json()]);
-    [...(citiesJson.data||citiesJson||[]), ...(munJson.data||munJson||[])].forEach(rec=>{
-      if(rec && rec.code && rec.zip_code) zipByCode[rec.code] = String(rec.zip_code).trim();
-    });
-  }catch(e){
-    console.warn('Could not load PH zip code data (v1 API) — falling back to overrides only:', e);
-  }
-  return zipByCode;
-}
-
 function psgcLoad(){
   if(psgcLoadPromise) return psgcLoadPromise;
   psgcLoadPromise = (async()=>{
     try{
-      const [provRes, cityRes, zipByCode] = await Promise.all([
+      const [provRes, cityRes] = await Promise.all([
         fetch(PSGC_BASE+'/provinces'),
-        fetch(PSGC_BASE+'/cities-municipalities'),
-        psgcLoadZipMap()
+        fetch(PSGC_BASE+'/cities-municipalities')
       ]);
       const provJson = await provRes.json();
       const cityJson = await cityRes.json();
 
+      // The v2 /cities-municipalities endpoint already includes zip_code directly on
+      // each record, so no separate v1 fetch/join is needed (that older approach was
+      // fragile — an extra round trip that could fail independently of the main load,
+      // e.g. due to CORS or rate limiting, silently leaving zip blank).
+      // The API itself leaves zip_code empty for a few towns (see ZIP_OVERRIDES
+      // above) — patch those in here so auto-fill still works for them.
       const rawCities = (cityJson.data||[]).map(c=>{
         const name = (c.name||'').trim();
         const province = c.province? String(c.province).trim() : '';
-        const zip = zipByCode[c.code] || c.zip_code || ZIP_OVERRIDES[province+'|'+name] || '';
+        const zip = c.zip_code || ZIP_OVERRIDES[province+'|'+name] || '';
         return { name, type:c.type, region:c.region, province, zip, code:c.code };
       });
       const provinceMap = new Map();
