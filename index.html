@@ -758,6 +758,83 @@ function blankForm(){
   };
 }
 
+/* ============================= PSGC (Philippine Standard Geographic Code) ============================= */
+/* Powers the Province / City-Municipality / Barangay dropdowns, with Region and
+   Zip Code auto-filled from the selection. Data comes from the free, public
+   PSGC Cloud API (https://psgc.cloud) — no key required. */
+const PSGC_BASE = 'https://psgc.cloud/api/v2';
+let psgcProvinces = null;   // [{name, region}]
+let psgcCities = null;      // [{name, type, region, province, zip, code}]
+let psgcReady = false;
+let psgcLoadPromise = null;
+const psgcBarangayCache = {}; // cityCode -> array of names, or 'loading'
+
+function escAttr(s){ return String(s===undefined||s===null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+function psgcLoad(){
+  if(psgcLoadPromise) return psgcLoadPromise;
+  psgcLoadPromise = (async()=>{
+    try{
+      const [provRes, cityRes] = await Promise.all([
+        fetch(PSGC_BASE+'/provinces'),
+        fetch(PSGC_BASE+'/cities-municipalities')
+      ]);
+      const provJson = await provRes.json();
+      const cityJson = await cityRes.json();
+      const rawCities = (cityJson.data||[]).map(c=>({
+        name:(c.name||'').trim(), type:c.type, region:c.region,
+        province:c.province? String(c.province).trim() : '',
+        zip:c.zip_code||'', code:c.code
+      }));
+      const provinceMap = new Map();
+      (provJson.data||[]).forEach(p=>{ provinceMap.set(p.name, p.region); });
+      // NCR cities have no province in PSGC — group them under a synthetic entry
+      const hasNCR = rawCities.some(c=>!c.province && /National Capital Region/i.test(c.region||''));
+      if(hasNCR) provinceMap.set('Metro Manila', 'National Capital Region (NCR)');
+      psgcProvinces = Array.from(provinceMap.entries())
+        .map(([name,region])=>({name,region}))
+        .sort((a,b)=>a.name.localeCompare(b.name));
+      psgcCities = rawCities;
+      psgcReady = true;
+    }catch(e){
+      console.error('Could not load PH address data', e);
+      psgcProvinces = []; psgcCities = []; psgcReady = false; psgcLoadPromise = null;
+    }
+    render();
+  })();
+  return psgcLoadPromise;
+}
+function psgcCitiesForProvince(provinceName){
+  if(!psgcCities || !provinceName) return [];
+  const list = provinceName==='Metro Manila'
+    ? psgcCities.filter(c=>!c.province && /National Capital Region/i.test(c.region||''))
+    : psgcCities.filter(c=>c.province===provinceName);
+  return list.slice().sort((a,b)=>a.name.localeCompare(b.name));
+}
+function psgcFindCity(provinceName, cityName){
+  if(!cityName) return null;
+  return psgcCitiesForProvince(provinceName).find(c=>c.name===cityName) || null;
+}
+function psgcRegionForProvince(provinceName){
+  const p = (psgcProvinces||[]).find(p=>p.name===provinceName);
+  return p ? p.region : '';
+}
+function psgcLoadBarangays(cityCode){
+  if(!cityCode) return Promise.resolve([]);
+  const cached = psgcBarangayCache[cityCode];
+  if(Array.isArray(cached)) return Promise.resolve(cached);
+  if(cached==='loading') return Promise.resolve(null);
+  psgcBarangayCache[cityCode] = 'loading';
+  return fetch(PSGC_BASE+'/cities-municipalities/'+encodeURIComponent(cityCode)+'/barangays')
+    .then(r=>r.json())
+    .then(json=>{
+      const names = (json.data||[]).map(b=>(b.name||'').trim()).sort((a,b)=>a.localeCompare(b));
+      psgcBarangayCache[cityCode] = names;
+      return names;
+    })
+    .catch(e=>{ delete psgcBarangayCache[cityCode]; return []; });
+}
+
 const MED_HISTORY_OPTIONS = ["Hypertension","Diabetes Mellitus","Asthma","Tuberculosis","Heart Disease","Cancer","Kidney Disease","Stroke","Thyroid Disorder","Epilepsy/Seizure Disorder"];
 const CONSULTATION_TYPE_OPTIONS = ["Adult Immunization","Child Immunization","Dental Care","General","Animal Bite","Child Nutrition","Injury","Sick Children","Child Care","Prenatal","Post-Partum","Tuberculosis","HIV"];
 
@@ -1088,6 +1165,42 @@ function chipGroup(id,labelText,options,opts={}){
     </div>${opts.hint?`<div class="hint">${opts.hint}</div>`:''}</div>`;
 }
 
+function addressSelect(id,labelText,options,opts={}){
+  const req = opts.req?'<span class="req"> *</span>':'<span class="opt"> (optional)</span>';
+  const val = form[id]||"";
+  return `<div class="field"><label for="${id}">${labelText}${req}</label>
+    <select id="${id}" data-address="${id}" ${opts.disabled?'disabled':''}>
+      <option value="">${opts.placeholder||'Select…'}</option>
+      ${options.map(o=>`<option value="${escAttr(o)}" ${val===o?'selected':''}>${escAttr(o)}</option>`).join('')}
+    </select>${opts.hint?`<div class="hint">${opts.hint}</div>`:''}</div>`;
+}
+function renderAddressFields(){
+  if(!psgcReady) psgcLoad();
+  const provinceOptions = psgcReady ? psgcProvinces.map(p=>p.name) : [];
+
+  const cityOptions = (psgcReady && form.province) ? psgcCitiesForProvince(form.province).map(c=>c.name) : [];
+  const cityRec = (psgcReady && form.province && form.cityMun) ? psgcFindCity(form.province, form.cityMun) : null;
+
+  let barangayOptions = [];
+  let barangayHint = '';
+  if(!form.province){ barangayHint = 'Select a province first'; }
+  else if(!form.cityMun){ barangayHint = 'Select a city/municipality first'; }
+  else if(cityRec){
+    const cached = psgcBarangayCache[cityRec.code];
+    if(Array.isArray(cached)) barangayOptions = cached;
+    else{ barangayHint = 'Loading barangays…'; psgcLoadBarangays(cityRec.code).then(()=>render()); }
+  }
+
+  return `
+    <div class="g-6">${addressSelect('province','Province',provinceOptions,{req:true, placeholder: psgcReady?'Select…':'Loading provinces…'})}</div>
+    <div class="g-6">${addressSelect('cityMun','City/Municipality',cityOptions,{req:true, disabled:!form.province, placeholder: form.province?'Select…':'Select a province first'})}</div>
+    <div class="g-6">${addressSelect('barangay','Barangay',barangayOptions,{req:true, disabled:!cityRec, hint:barangayHint, placeholder: cityRec?'Select…':'Select…'})}</div>
+    <div class="g-6">${field('region','Region','text',{disabled:true, hint:'Auto-filled from Province'})}</div>
+    <div class="g-8">${field('purok','Purok/Sitio','text',{cap:true})}</div>
+    <div class="g-4">${field('zip','Zip Code','text',{hint:'Auto-filled — you can edit it'})}</div>
+  `;
+}
+
 /* ---- Step 1 ---- */
 function stepIdentification(){
   const age = calcAge(form.birthdate);
@@ -1111,12 +1224,7 @@ function stepIdentification(){
     <hr class="divider">
     <div class="section-title"><h2 style="font-size:16px;">Address</h2></div>
     <div class="grid">
-      <div class="g-6">${field('region','Region','text',{cap:true})}</div>
-      <div class="g-6">${field('province','Province','text',{placeholder:'Cebu',cap:true})}</div>
-      <div class="g-6">${field('cityMun','City/Municipality','text',{placeholder:'Carmen',cap:true})}</div>
-      <div class="g-6">${field('barangay','Barangay','text',{cap:true})}</div>
-      <div class="g-8">${field('purok','Purok/Sitio','text',{cap:true})}</div>
-      <div class="g-4">${field('zip','Zip Code','text')}</div>
+      ${renderAddressFields()}
     </div>
     <hr class="divider">
     <div class="section-title"><h2 style="font-size:16px;">Emergency Contact</h2></div>
@@ -1428,6 +1536,23 @@ function attachPatientHandlers(){
       let v = el.value;
       if(el.dataset.cap){ v = toTitleCase(v); el.value = v; }
       form[el.dataset.field]=v; saveDraft();
+    });
+  });
+  document.querySelectorAll('[data-address]').forEach(el=>{
+    el.addEventListener('change',()=>{
+      const id = el.dataset.address;
+      form[id] = el.value;
+      if(id==='province'){
+        form.cityMun=''; form.barangay=''; form.zip='';
+        form.region = psgcRegionForProvince(el.value);
+      }else if(id==='cityMun'){
+        form.barangay='';
+        const cityRec = psgcFindCity(form.province, el.value);
+        form.zip = cityRec ? (cityRec.zip||'') : '';
+        if(cityRec) psgcLoadBarangays(cityRec.code);
+      }
+      saveDraft();
+      render();
     });
   });
   document.querySelectorAll('[data-chipgroup]').forEach(group=>{
@@ -1760,6 +1885,59 @@ function ef(rec,id,label,type,opts={}){
     <input type="${type}" id="${fid}" data-fid="${id}" value="${val}"></div>`;
 }
 
+function efAddressSelect(rec,id,label,options,opts={}){
+  const val = rec[id] || "";
+  const fid = 'f_'+id;
+  return `<div class="field"><label for="${fid}">${label}</label>
+    <select id="${fid}" data-fid="${id}" ${opts.disabled?'disabled':''}>
+      <option value="">${opts.placeholder||'—'}</option>
+      ${options.map(o=>`<option value="${escAttr(o)}" ${val===o?'selected':''}>${escAttr(o)}</option>`).join('')}
+    </select>${opts.hint?`<div class="hint" style="margin-top:4px;">${opts.hint}</div>`:''}</div>`;
+}
+function efAddressBlock(rec){
+  if(!psgcReady) psgcLoad().then(()=>refreshStaffAddress(rec));
+  const provinceOptions = psgcReady ? psgcProvinces.map(p=>p.name) : [];
+  const cityOptions = (psgcReady && rec.province) ? psgcCitiesForProvince(rec.province).map(c=>c.name) : [];
+  const cityRec = (psgcReady && rec.province && rec.cityMun) ? psgcFindCity(rec.province, rec.cityMun) : null;
+
+  let barangayOptions = [];
+  if(cityRec){
+    const cached = psgcBarangayCache[cityRec.code];
+    if(Array.isArray(cached)) barangayOptions = cached;
+    else psgcLoadBarangays(cityRec.code).then(()=>refreshStaffAddress(rec));
+  }
+
+  return `
+    <div class="g-6">${efAddressSelect(rec,'province','Province',provinceOptions,{placeholder: psgcReady?'Select…':'Loading…'})}</div>
+    <div class="g-6">${efAddressSelect(rec,'cityMun','City/Municipality',cityOptions,{disabled:!rec.province, placeholder: rec.province?'Select…':'Select a province first'})}</div>
+    <div class="g-6">${efAddressSelect(rec,'barangay','Barangay',barangayOptions,{disabled:!cityRec, placeholder: cityRec?'Select…':'Select a city first'})}</div>
+    <div class="g-6">${ef(rec,'region','Region','text')}</div>
+    <div class="g-8">${ef(rec,'purok','Purok/Sitio','text')}</div>
+    <div class="g-4">${ef(rec,'zip','Zip Code','text')}</div>
+  `;
+}
+function refreshStaffAddress(rec){
+  const block = document.getElementById('staffAddressBlock');
+  if(!block) return; // staff has navigated away from this record
+  block.innerHTML = efAddressBlock(rec);
+  attachStaffAddressHandlers(rec);
+}
+function attachStaffAddressHandlers(rec){
+  const provSel = document.getElementById('f_province');
+  const citySel = document.getElementById('f_cityMun');
+  if(provSel) provSel.addEventListener('change',()=>{
+    rec.province = provSel.value; rec.cityMun=''; rec.barangay=''; rec.zip='';
+    rec.region = psgcRegionForProvince(rec.province);
+    refreshStaffAddress(rec);
+  });
+  if(citySel) citySel.addEventListener('change',()=>{
+    rec.cityMun = citySel.value; rec.barangay='';
+    const cityRec = psgcFindCity(rec.province, rec.cityMun);
+    rec.zip = cityRec ? (cityRec.zip||'') : '';
+    refreshStaffAddress(rec);
+  });
+}
+
 async function loadStaffDetail(id){
   const host=document.getElementById('detailHost');
   let rec = staffRecordsCache[id] || null;
@@ -1799,14 +1977,7 @@ async function loadStaffDetail(id){
       </div>
       <hr class="divider">
       <div class="section-title"><h2 style="font-size:15px;">Address</h2></div>
-      <div class="grid">
-        <div class="g-6">${ef(rec,'region','Region','text')}</div>
-        <div class="g-6">${ef(rec,'province','Province','text')}</div>
-        <div class="g-6">${ef(rec,'cityMun','City/Municipality','text')}</div>
-        <div class="g-6">${ef(rec,'barangay','Barangay','text')}</div>
-        <div class="g-8">${ef(rec,'purok','Purok/Sitio','text')}</div>
-        <div class="g-4">${ef(rec,'zip','Zip Code','text')}</div>
-      </div>
+      <div class="grid" id="staffAddressBlock">${efAddressBlock(rec)}</div>
       <hr class="divider">
       <div class="section-title"><h2 style="font-size:15px;">Emergency Contact &amp; Reach</h2></div>
       <div class="grid">
@@ -1953,6 +2124,8 @@ async function loadStaffDetail(id){
     </div>
   `;
 
+  attachStaffAddressHandlers(rec);
+
   // birthdate -> live age recalculation
   const bdInput = document.getElementById('f_birthdate');
   if(bdInput) bdInput.addEventListener('input', ()=>{
@@ -2052,6 +2225,7 @@ async function loadStaffDetail(id){
 
 /* ============================= INIT ============================= */
 (async function init(){
+  psgcLoad();
   attachLandingHandlers();
   if(location.hash === '#staff'){
     view = 'staffGate';
