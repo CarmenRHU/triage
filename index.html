@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RHU Carmen, Cebu — Patient Triage</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F5F6F1;
+    --primary:#1F5C4E;
+    --primary-dark:#123A30;
+    --accent:#D98E3E;
+    --accent-deep:#B96F26;
+    --alert:#B3432F;
+    --ink:#1C2622;
+    --muted:#4C5852;
+    --line:rgba(28,38,34,.14);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:'IBM Plex Sans',sans-serif;
+    color:var(--ink);
+    min-height:100vh;
+    /* full-page background photo — scrolls with the page and stretches to
+       cover the whole site, not just the first screen */
+    background:#0B1E36 url('carmen_cebu.png') top right / cover no-repeat;
+    position:relative;
+  }
+  /* light scrim so the white panels and text stay readable over the photo */
+  body::before{
+    content:"";
+    position:absolute;
+    inset:0;
+    background:linear-gradient(to bottom,
+      rgba(10,26,22,.28) 0%,
+      rgba(10,26,22,.12) 30%,
+      rgba(10,26,22,.35) 100%);
+    pointer-events:none;
+  }
+
+  .stage{
+    position:relative;
+    z-index:1;
+    width:100%;
+    max-width:640px;
+    margin:0 auto;
+    padding:40px 18px 60px;
+  }
+
+  /* ---------- hero text, sits directly over the photo ---------- */
+  .hero{text-align:center;margin-bottom:22px;}
+  .seal-row{
+    display:flex;align-items:center;justify-content:center;gap:10px;
+    margin-bottom:16px;
+    text-transform:uppercase;
+    letter-spacing:.16em;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    font-weight:600;
+    color:#FFE3AE;
+    -webkit-text-stroke:.4px rgba(0,0,0,.25);
+  }
+  .seal-row .dot{width:5px;height:5px;border-radius:50%;background:var(--accent);}
+  h1.title{
+    font-family:'Fraunces',serif;
+    font-weight:700;
+    font-size:clamp(28px,7.5vw,44px);
+    line-height:1.12;
+    margin:0 0 8px;
+    color:#fff;
+    -webkit-text-stroke:.6px rgba(18,58,48,.55);
+    text-shadow:0 2px 4px rgba(0,0,0,.35), 0 10px 26px rgba(0,0,0,.4);
+  }
+  .subtitle{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-size:clamp(16px,3.4vw,19px);
+    color:#FFE3AE;
+    margin:0;
+    -webkit-text-stroke:.3px rgba(0,0,0,.2);
+    text-shadow:0 2px 8px rgba(0,0,0,.45);
+  }
+
+  /* ---------- white translucent panel — everything patients need to read ---------- */
+  .panel{
+    background:rgba(255,255,255,.88);
+    backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,.6);
+    border-radius:16px;
+    padding:26px 24px 24px;
+    box-shadow:0 20px 50px rgba(6,18,15,.35);
+  }
+  .panel + .panel{margin-top:14px;}
+  .panel-title{
+    display:flex;align-items:center;gap:9px;
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-size:17px;
+    color:var(--primary-dark);
+    margin:0 0 4px;
+  }
+  .panel-title svg{width:19px;height:19px;stroke:var(--accent-deep);flex:none;}
+  .panel-sub{font-size:13px;color:var(--muted);margin:0 0 16px;}
+
+  .desc{
+    font-size:14.5px;
+    line-height:1.65;
+    color:var(--ink);
+    margin:0 0 18px;
+  }
+  .desc b{color:var(--primary-dark);}
+
+  .facts{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 4px;}
+  .fact{
+    display:flex;align-items:center;gap:7px;
+    border:1px solid var(--line);
+    background:#fff;
+    padding:7px 13px;
+    border-radius:999px;
+    font-size:12.5px;
+    font-weight:500;
+    color:var(--primary-dark);
+  }
+  .fact svg{width:14px;height:14px;flex:none;stroke:var(--accent-deep);}
+
+  .checklist{list-style:none;margin:0;padding:0;display:grid;gap:10px;}
+  .checklist li{
+    display:flex;align-items:flex-start;gap:11px;
+    font-size:13.8px;
+    line-height:1.5;
+    color:var(--ink);
+    background:#fff;
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:11px 13px;
+  }
+  .checklist .ic{
+    flex:none;width:26px;height:26px;border-radius:50%;
+    background:var(--primary);color:#fff;
+    display:flex;align-items:center;justify-content:center;
+    font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;
+  }
+  .checklist b{color:var(--primary-dark);}
+
+  .emergency-note{
+    display:flex;gap:11px;align-items:flex-start;
+    background:#FBEAE5;
+    border:1px solid #E3B7AC;
+    border-radius:10px;
+    padding:12px 14px;
+    font-size:13.2px;
+    line-height:1.55;
+    color:#6E271B;
+    margin-top:14px;
+  }
+  .emergency-note svg{flex:none;width:19px;height:19px;stroke:var(--alert);margin-top:1px;}
+  .emergency-note b{color:var(--alert);}
+
+  .go-btn{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    width:100%;
+    background:var(--accent);
+    color:#3A2408;
+    font-family:'IBM Plex Sans',sans-serif;
+    font-weight:700;
+    font-size:16px;
+    padding:16px 30px;
+    border:none;
+    border-radius:12px;
+    text-decoration:none;
+    margin-top:20px;
+    box-shadow:0 10px 26px rgba(185,111,38,.4), 0 2px 0 rgba(255,255,255,.35) inset;
+    transition:transform .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+  .go-btn:hover{
+    background:#E9A24E;
+    transform:translateY(-2px);
+    box-shadow:0 14px 32px rgba(185,111,38,.48), 0 2px 0 rgba(255,255,255,.35) inset;
+  }
+  .go-btn:active{transform:translateY(0);}
+  .go-btn svg{width:19px;height:19px;}
+
+  .fine{
+    text-align:center;
+    margin-top:18px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:11px;
+    letter-spacing:.06em;
+    color:#fff;
+    -webkit-text-stroke:.3px rgba(0,0,0,.2);
+    text-shadow:0 1px 6px rgba(0,0,0,.5);
+  }
+
+  @media (max-width:420px){
+    .stage{padding:30px 14px 44px;}
+    .panel{padding:20px 16px 18px;}
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+
+    <div class="hero">
+      <div class="seal-row"><span class="dot"></span>Municipality of Carmen · Province of Cebu<span class="dot"></span></div>
+      <h1 class="title">Rural Health Unit<br>Patient Triage System</h1>
+      <p class="subtitle">RHU Carmen, Cebu</p>
+      <a class="go-btn" href="app.html">
+        Go to Homepage
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+      </a>
+    </div>
+
+    <div class="panel">
+      <h2 class="panel-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 8 3.5v5.7c0 5-3.4 9-8 10.8-4.6-1.8-8-5.8-8-10.8V5.5z"/><path d="m9 12 2 2 4-4"/></svg>
+        Welcome
+      </h2>
+      <p class="desc">
+        This is a faster, paperless way to check in at RHU Carmen. Answer a short
+        set of questions about your <b>health, symptoms, and history</b> before
+        your visit, so our staff can prepare and attend to you more quickly.
+      </p>
+      <div class="facts">
+        <span class="fact">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21c-4.5-3-8-6.5-8-11a8 8 0 0 1 16 0c0 4.5-3.5 8-8 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>
+          Carmen, Cebu
+        </span>
+        <span class="fact">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          Secure &amp; Confidential
+        </span>
+        <span class="fact">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+          Takes About 5 Minutes
+        </span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 class="panel-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11.5 11 14l4-5.5"/><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+        Before You Begin
+      </h2>
+      <p class="panel-sub">A quick heads-up so your check-in goes smoothly.</p>
+      <ul class="checklist">
+        <li><span class="ic">1</span><span>Have a <b>valid ID</b> and your <b>PhilHealth number</b> (if available) ready — you'll be asked for these.</span></li>
+        <li><span class="ic">2</span><span>List down any <b>current medications</b> and known <b>allergies</b> beforehand; it speeds up the medical history section.</span></li>
+        <li><span class="ic">3</span><span>Answer honestly and completely — your responses directly guide how staff <b>prioritize and treat</b> your visit.</span></li>
+        <li><span class="ic">4</span><span>Your information stays <b>within RHU Carmen's records</b> and is used only for your care and triage.</span></li>
+        <li><span class="ic">5</span><span>If you're filling this out for someone else (a child, an elderly relative), use <b>their</b> details, not your own.</span></li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <h2 class="panel-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+        A Few More Reminders
+      </h2>
+      <p class="panel-sub">Some things worth knowing before you get started.</p>
+      <ul class="checklist">
+        <li><span class="ic">6</span><span>Regular clinic hours are <b>Monday–Friday, 8:00 AM–5:00 PM</b>, except holidays. Walk-ins are welcome, but arriving early helps you get seen sooner.</span></li>
+        <li><span class="ic">7</span><span>After you submit, please wait for your <b>name or number</b> to be called at the waiting area — no need to keep approaching the counter.</span></li>
+        <li><span class="ic">8</span><span>Bring a <b>companion</b> if you need help with mobility, hearing, or reading — staff can also assist you in <b>English or Bisaya/Cebuano</b>.</span></li>
+        <li><span class="ic">9</span><span>Some visits (lab work, referrals, or seeing a specific provider) may take <b>longer than others</b> — thank you for your patience.</span></li>
+        <li><span class="ic">10</span><span>Not sure about something on the form? You can leave it blank and <b>ask the front desk</b> once you arrive.</span></li>
+      </ul>
+      <div class="emergency-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+        <span><b>In an active emergency</b> (severe bleeding, difficulty breathing, unconsciousness), go straight to the RHU front desk or call for help — don't wait to fill out the form first.</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 class="panel-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Filling This Out for a Child or an Elderly Relative?
+      </h2>
+      <p class="panel-sub">This happens often — here's how to do it correctly.</p>
+      <ul class="checklist">
+        <li><span class="ic">11</span><span>Fill in the <b>patient's own name</b> and details (the child's, or your elderly relative's) — not the details of whoever is typing the form.</span></li>
+        <li><span class="ic">12</span><span>Note the <b>full name and relationship</b> of the parent, guardian, or relative assisting (e.g. "Mother," "Son," "Caregiver") — front desk staff will ask for this too.</span></li>
+        <li><span class="ic">13</span><span>If the patient is a <b>minor</b>, a parent or legal guardian must sign a <b>Consent to Care</b> form at the RHU front desk before treatment can proceed.</span></li>
+        <li><span class="ic">14</span><span>Bring <b>both</b> IDs if possible — the patient's (or their birth certificate/PhilHealth for a child), and the assisting relative's own valid ID.</span></li>
+        <li><span class="ic">15</span><span>The assisting relative may answer history questions on the patient's behalf, but symptoms and history should reflect the <b>patient</b>, not the person filling out the form.</span></li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <h2 class="panel-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        Getting the Most Out of Your Visit
+      </h2>
+      <p class="panel-sub">A few extra pointers from our staff.</p>
+      <ul class="checklist">
+        <li><span class="ic">16</span><span>Senior citizens, PWDs, and pregnant patients may use the <b>priority lane</b> at the front desk — let staff know when you arrive.</span></li>
+        <li><span class="ic">17</span><span>The building is <b>wheelchair-accessible</b> with a ramp at the main entrance; feel free to ask staff for assistance getting around.</span></li>
+        <li><span class="ic">18</span><span>Waits can vary depending on the day — bringing <b>water and something to keep you occupied</b> can help if it gets busy.</span></li>
+        <li><span class="ic">19</span><span>Double-check your <b>contact number</b> on the form — it's how staff will reach you if there are updates about your visit.</span></li>
+        <li><span class="ic">20</span><span>You can review and edit your answers before submitting — take your time, there's no rush.</span></li>
+      </ul>
+    </div>
+
+    <div class="fine">CARMEN MUNICIPAL BUILDING · RURAL HEALTH UNIT</div>
+  </div>
+</body>
+</html>
