@@ -767,7 +767,8 @@ let psgcProvinces = null;   // [{name, region}]
 let psgcCities = null;      // [{name, type, region, province, zip, code}]
 let psgcReady = false;
 let psgcLoadPromise = null;
-const psgcBarangayCache = {}; // cityCode -> array of names, or 'loading'
+const psgcBarangayCache = {}; // cityCode -> array of names, or an in-flight Promise
+const psgcBarangayRenderScheduled = new Set(); // cityCodes that already have a pending render() queued
 
 function escAttr(s){ return String(s===undefined||s===null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
@@ -781,6 +782,11 @@ function psgcLoad(){
       ]);
       const provJson = await provRes.json();
       const cityJson = await cityRes.json();
+
+      // The v2 /cities-municipalities endpoint already includes zip_code directly on
+      // each record, so no separate v1 fetch/join is needed (that older approach was
+      // fragile — an extra round trip that could fail independently of the main load,
+      // e.g. due to CORS or rate limiting, silently leaving zip blank).
       const rawCities = (cityJson.data||[]).map(c=>({
         name:(c.name||'').trim(), type:c.type, region:c.region,
         province:c.province? String(c.province).trim() : '',
@@ -823,9 +829,11 @@ function psgcLoadBarangays(cityCode){
   if(!cityCode) return Promise.resolve([]);
   const cached = psgcBarangayCache[cityCode];
   if(Array.isArray(cached)) return Promise.resolve(cached);
-  if(cached==='loading') return Promise.resolve(null);
-  psgcBarangayCache[cityCode] = 'loading';
-  return fetch(PSGC_BASE+'/cities-municipalities/'+encodeURIComponent(cityCode)+'/barangays')
+  // Already loading: return the SAME in-flight promise rather than a fresh
+  // resolved-with-null one, so callers actually wait for the real result
+  // instead of immediately re-triggering another render() in a tight loop.
+  if(cached && typeof cached.then==='function') return cached;
+  const promise = fetch(PSGC_BASE+'/cities-municipalities/'+encodeURIComponent(cityCode)+'/barangays')
     .then(r=>r.json())
     .then(json=>{
       const names = (json.data||[]).map(b=>(b.name||'').trim()).sort((a,b)=>a.localeCompare(b));
@@ -833,6 +841,8 @@ function psgcLoadBarangays(cityCode){
       return names;
     })
     .catch(e=>{ delete psgcBarangayCache[cityCode]; return []; });
+  psgcBarangayCache[cityCode] = promise;
+  return promise;
 }
 
 const MED_HISTORY_OPTIONS = ["Hypertension","Diabetes Mellitus","Asthma","Tuberculosis","Heart Disease","Cancer","Kidney Disease","Stroke","Thyroid Disorder","Epilepsy/Seizure Disorder"];
@@ -1188,7 +1198,13 @@ function renderAddressFields(){
   else if(cityRec){
     const cached = psgcBarangayCache[cityRec.code];
     if(Array.isArray(cached)) barangayOptions = cached;
-    else{ barangayHint = 'Loading barangays…'; psgcLoadBarangays(cityRec.code).then(()=>render()); }
+    else{
+      barangayHint = 'Loading barangays…';
+      if(!psgcBarangayRenderScheduled.has(cityRec.code)){
+        psgcBarangayRenderScheduled.add(cityRec.code);
+        psgcLoadBarangays(cityRec.code).then(()=>{ psgcBarangayRenderScheduled.delete(cityRec.code); render(); });
+      }
+    }
   }
 
   return `
