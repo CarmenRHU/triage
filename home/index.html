@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <link rel="icon" type="image/png" href="../favicon.png">
+  <link rel="icon" type="image/png" href="favicon.png">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RHU Carmen, Cebu — Patient Triage</title>
@@ -24,7 +24,7 @@
     --radius:10px;
   }
   *{box-sizing:border-box;}
-  html,body{margin:0;padding:0;}
+  html,body{margin:0;padding:0;overscroll-behavior-y:contain;}
   body{
     background:var(--bg);
     color:var(--ink);
@@ -128,7 +128,7 @@
   label .opt{color:var(--muted);font-weight:400;text-transform:none;}
   label .req{color:var(--alert);}
   .field{margin-bottom:2px;}
-  input[type=text],input[type=number],input[type=date],input[type=month],input[type=email],input[type=tel],select,textarea{
+  input[type=text],input[type=number],input[type=date],input[type=month],input[type=email],input[type=tel],input[type=password],select,textarea{
     width:100%;
     padding:10px 12px;
     border:1px solid #C9D3CD;
@@ -282,7 +282,7 @@
 
     /* Prevent iOS Safari auto-zoom on focus by keeping inputs at 16px */
     input[type=text],input[type=number],input[type=date],input[type=month],input[type=email],
-    input[type=tel],select,textarea{font-size:16px;padding:11px 12px;}
+    input[type=tel],input[type=password],select,textarea{font-size:16px;padding:11px 12px;}
     label{font-size:12px;}
 
     .stepper{margin:18px 0 4px;}
@@ -721,10 +721,11 @@
 
 <script>
 /* ============================= DATA / STATE ============================= */
-const STAFF_CODE = "carmen-rhu-2026"; // change this to your own private passcode
+const STAFF_CODE = "@Carmenrhu2026"; // change this to your own private passcode
 let view = "landing"; // landing | patient | staffGate | staffList | staffDetail
 let staffAuthed = false;
 let currentRecordId = null;
+const maskedFieldValues = {}; // real text behind manually-masked (dot) fields, keyed by input id
 
 let form = blankForm();
 let step = 0;
@@ -827,7 +828,12 @@ function psgcLoad(){
       console.error('Could not load PH address data', e);
       psgcProvinces = []; psgcCities = []; psgcReady = false; psgcLoadPromise = null;
     }
-    render();
+    // Only re-render if the current screen actually shows PSGC-driven UI
+    // (the patient intake form's address fields). Re-rendering unconditionally
+    // here used to blow away whatever the user was doing on other screens —
+    // e.g. wiping the Staff Access passcode field mid-keystroke the moment
+    // this background fetch happened to finish.
+    if(view==='patient') render();
   })();
   return psgcLoadPromise;
 }
@@ -1183,9 +1189,72 @@ function field(id,labelText,type,opts={}){
       <textarea id="${id}" data-field="${id}" placeholder="${opts.placeholder||''}">${val}</textarea>
       ${opts.hint?`<div class="hint">${opts.hint}</div>`:''}</div>`;
   }
+  const isMasked = type==='password';
   return `<div class="field"><label for="${id}">${labelText}${req}</label>
-    <input type="${type}" id="${id}" data-field="${id}" value="${val}" placeholder="${opts.placeholder||''}" ${opts.disabled?'disabled':''} ${opts.cap?'data-cap="1" autocapitalize="words"':''}>
+    <input type="text" id="${id}" data-field="${id}" ${isMasked?'data-masked="true" value=""':`value="${val}"`} placeholder="${opts.placeholder||''}" ${opts.disabled?'disabled':''} ${opts.cap?'data-cap="1" autocapitalize="words"':''} ${isMasked?'autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true"':(opts.autocomplete?`autocomplete="${opts.autocomplete}"`:'')}>
     ${opts.hint?`<div class="hint">${opts.hint}</div>`:''}</div>`;
+}
+function setupMaskedInput(input){
+  maskedFieldValues[input.id] = '';
+  const supportsBeforeInput = 'onbeforeinput' in input;
+  if(supportsBeforeInput){
+    input.addEventListener('beforeinput',(e)=>{
+      e.preventDefault();
+      let real = maskedFieldValues[input.id] || '';
+      const selStart = input.selectionStart, selEnd = input.selectionEnd;
+      let newReal = real, newCursor = selStart;
+      const type = e.inputType || '';
+      if(type.startsWith('insert')){
+        const text = e.data || '';
+        newReal = real.slice(0,selStart) + text + real.slice(selEnd);
+        newCursor = selStart + text.length;
+      } else if(type==='deleteContentBackward'){
+        if(selStart===selEnd){ newReal = real.slice(0,Math.max(0,selStart-1)) + real.slice(selEnd); newCursor = Math.max(0,selStart-1); }
+        else { newReal = real.slice(0,selStart) + real.slice(selEnd); newCursor = selStart; }
+      } else if(type==='deleteContentForward'){
+        if(selStart===selEnd){ newReal = real.slice(0,selStart) + real.slice(selEnd+1); }
+        else { newReal = real.slice(0,selStart) + real.slice(selEnd); }
+        newCursor = selStart;
+      } else if(type==='deleteByCut' || type.startsWith('delete')){
+        newReal = real.slice(0,selStart) + real.slice(selEnd);
+        newCursor = selStart;
+      }
+      maskedFieldValues[input.id] = newReal;
+      input.value = '•'.repeat(newReal.length);
+      input.setSelectionRange(newCursor,newCursor);
+    });
+  } else {
+    // Fallback for browsers without reliable beforeinput support
+    input.addEventListener('input',()=>{
+      let real = maskedFieldValues[input.id] || '';
+      const start = input.selectionStart;
+      const newVal = input.value;
+      if(newVal.length > real.length){
+        const insCount = newVal.length - real.length;
+        const insPos = Math.max(0, start - insCount);
+        const inserted = newVal.slice(insPos, start);
+        real = real.slice(0,insPos) + inserted + real.slice(insPos);
+      } else if(newVal.length < real.length){
+        const delCount = real.length - newVal.length;
+        real = real.slice(0,start) + real.slice(start+delCount);
+      }
+      maskedFieldValues[input.id] = real;
+      input.value = '•'.repeat(real.length);
+      input.setSelectionRange(start,start);
+    });
+  }
+  input.addEventListener('paste',(e)=>{
+    if(!supportsBeforeInput){
+      e.preventDefault();
+      const text = (e.clipboardData||window.clipboardData).getData('text');
+      const start = input.selectionStart, end = input.selectionEnd;
+      let real = maskedFieldValues[input.id] || '';
+      real = real.slice(0,start) + text + real.slice(end);
+      maskedFieldValues[input.id] = real;
+      input.value = '•'.repeat(real.length);
+      input.setSelectionRange(start+text.length, start+text.length);
+    }
+  });
 }
 function chipGroup(id,labelText,options,opts={}){
   const req = opts.req?'<span class="req"> *</span>':'<span class="opt"> (optional)</span>';
@@ -1807,7 +1876,7 @@ function renderStaffGate(){
     <h2>Staff Access</h2>
     <p style="color:var(--muted);font-size:14px;">Enter the access code given to you by the RHU officer-in-charge to view and update patient records.</p>
     <div class="card">
-      <div class="field">${field('__passcode','Access Code','text',{req:true})}</div>
+      <div class="field">${field('__passcode','Access Code','password',{req:true,autocomplete:'off'})}</div>
       <div class="error-box" id="gateError"></div>
       <button class="btn btn-primary" id="gateSubmit" style="width:100%;">Enter</button>
     </div>
@@ -1817,9 +1886,10 @@ function attachStaffGateHandlers(){
   document.getElementById('navPatient').onclick=startNewPatientForm;
   document.getElementById('navStaff').onclick=openStaffTab;
   const input=document.getElementById('__passcode');
+  setupMaskedInput(input);
   const btn=document.getElementById('gateSubmit');
   const tryAuth=()=>{
-    if(input.value===STAFF_CODE){ staffAuthed=true; view='staffList'; render(); }
+    if((maskedFieldValues['__passcode']||'')===STAFF_CODE){ staffAuthed=true; view='staffList'; render(); }
     else{ const e=document.getElementById('gateError'); e.textContent='Incorrect access code.'; e.style.display='block'; }
   };
   btn.addEventListener('click',tryAuth);
